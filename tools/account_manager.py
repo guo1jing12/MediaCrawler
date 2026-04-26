@@ -66,6 +66,8 @@ def reset_account_profile() -> None:
     config.ACCOUNT_NAME = "default"
     config.ACCOUNT_PROXY = ""
     config.ACCOUNT_USER_AGENT = ""
+    config.COOKIES = ""
+    config.LOGIN_TYPE = "qrcode"
 
 
 def proxy_url_to_formats(proxy_url: str):

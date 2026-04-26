@@ -161,6 +161,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
             utils.logger.info(f"[XiaoHongShuCrawler.search] Current search keyword: {keyword}")
             page = 1
             search_id = get_search_id()
+            semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
             while (page - start_page + 1) * xhs_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
                 checkpoint_key = self.checkpoint.search_page_key(keyword, page)
                 if self.checkpoint.is_completed(checkpoint_key):
@@ -186,7 +187,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                     if not notes_res or not notes_res.get("has_more", False):
                         utils.logger.info("[XiaoHongShuCrawler.search] No more content!")
                         break
-                    semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
+
                     task_list = [
                         self.get_note_detail_async_task(
                             note_id=post_item.get("id"),
@@ -205,10 +206,6 @@ class XiaoHongShuCrawler(AbstractCrawler):
                     page += 1
                     utils.logger.info(f"[XiaoHongShuCrawler.search] Note details: {note_details}")
                     await self.batch_get_note_comments(note_ids, xsec_tokens)
-                    self.checkpoint.mark_completed(
-                        checkpoint_key,
-                        {"keyword": keyword, "page": page, "note_count": len(note_ids)},
-                    )
 
                     # Sleep after each page navigation
                     await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -216,6 +213,12 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 except DataFetchError:
                     utils.logger.error("[XiaoHongShuCrawler.search] Get note detail error")
                     break
+                finally:
+                    # Ensure checkpoint is persisted even on exception
+                    self.checkpoint.mark_completed(
+                        checkpoint_key,
+                        {"keyword": keyword, "page": page, "note_count": len(note_ids)},
+                    )
 
     async def get_creators_and_notes(self) -> None:
         """Get creator's notes and retrieve their comment information."""

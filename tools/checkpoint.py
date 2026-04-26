@@ -38,7 +38,8 @@ class CrawlCheckpoint:
             utils.logger.warning(f"[CrawlCheckpoint] Failed to load checkpoint {self.path}: {e}")
 
     def _save(self) -> None:
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        checkpoint_dir = os.path.dirname(self.path) or config.RESUME_CHECKPOINT_DIR
+        os.makedirs(checkpoint_dir, exist_ok=True)
         tmp_path = f"{self.path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(self._state, f, ensure_ascii=False, indent=2, sort_keys=True)
