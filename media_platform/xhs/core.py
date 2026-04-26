@@ -65,6 +65,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
         self.cdp_manager = None
         self.ip_proxy_pool = None  # Proxy IP pool for automatic proxy refresh
         self.checkpoint = CrawlCheckpoint(platform="xhs")
+        self._semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
 
     async def start(self) -> None:
         playwright_proxy_format, httpx_proxy_format = None, None
@@ -161,7 +162,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
             utils.logger.info(f"[XiaoHongShuCrawler.search] Current search keyword: {keyword}")
             page = 1
             search_id = get_search_id()
-            semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
+            semaphore = self._semaphore
             while (page - start_page + 1) * xhs_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
                 checkpoint_key = self.checkpoint.search_page_key(keyword, page)
                 if self.checkpoint.is_completed(checkpoint_key):
@@ -262,13 +263,12 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
     async def fetch_creator_notes_detail(self, note_list: List[Dict]):
         """Concurrently obtain the specified post list and save the data"""
-        semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
         task_list = [
             self.get_note_detail_async_task(
                 note_id=post_item.get("note_id"),
                 xsec_source=post_item.get("xsec_source"),
                 xsec_token=post_item.get("xsec_token"),
-                semaphore=semaphore,
+                semaphore=self._semaphore,
             ) for post_item in note_list
         ]
 
@@ -291,7 +291,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 note_id=note_url_info.note_id,
                 xsec_source=note_url_info.xsec_source,
                 xsec_token=note_url_info.xsec_token,
-                semaphore=asyncio.Semaphore(config.MAX_CONCURRENCY_NUM),
+                semaphore=self._semaphore,
             )
             get_note_detail_task_list.append(crawler_task)
 
@@ -364,11 +364,10 @@ class XiaoHongShuCrawler(AbstractCrawler):
             return
 
         utils.logger.info(f"[XiaoHongShuCrawler.batch_get_note_comments] Begin batch get note comments, note list: {note_list}")
-        semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
         task_list: List[Task] = []
         for index, note_id in enumerate(note_list):
             task = asyncio.create_task(
-                self.get_comments(note_id=note_id, xsec_token=xsec_tokens[index], semaphore=semaphore),
+                self.get_comments(note_id=note_id, xsec_token=xsec_tokens[index], semaphore=self._semaphore),
                 name=note_id,
             )
             task_list.append(task)
