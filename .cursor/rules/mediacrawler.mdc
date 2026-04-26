@@ -1,0 +1,37 @@
+---
+description: MediaCrawler agent workflow for safe crawling with multi-account, proxy, and resume support
+globs:
+  - "**/*.py"
+  - "config/**/*.json"
+  - "agent-skills/**/*.md"
+alwaysApply: false
+---
+
+# MediaCrawler Agent Rule
+
+When helping with MediaCrawler crawling tasks:
+
+- Read `agent-skills/mediacrawler/SKILL.md` before running crawler commands.
+- Treat cookies, tokens, and proxy passwords as secrets. Do not print them or commit them.
+- Prefer `config/accounts.json` for account credentials and keep it untracked.
+- Prefer `--enable_resume_crawl true` for all crawls.
+- Prefer `--disable_playwright true` when valid cookies are available.
+- Keep concurrency low by default.
+- Use `uv run python main.py --help` to confirm available options.
+- For browser login flows, use optional dependency installation: `uv sync --extra browser`.
+
+Default command shape:
+
+```bash
+uv run python main.py \
+  --platform <platform> \
+  --type <search|detail|creator> \
+  --keywords "<keywords>" \
+  --enable_multi_account true \
+  --account_config_path config/accounts.json \
+  --enable_resume_crawl true \
+  --disable_playwright true \
+  --save_data_option jsonl
+```
+
+Report output paths and checkpoint paths after a run.

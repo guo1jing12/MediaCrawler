@@ -121,6 +121,7 @@ celerybeat.pid
 
 # Environments
 .env
+config/accounts.json
 .venv
 env/
 venv/

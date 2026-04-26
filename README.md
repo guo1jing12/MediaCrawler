@@ -53,11 +53,12 @@
 
 ### Pro-like 开源增强
 
-当前分支增加了三个可直接使用的运行能力：
+当前分支增加了四个可直接使用的运行能力：
 
 - **多账号调度**：通过 `--enable_multi_account true --account_config_path config/accounts.json` 顺序运行同平台的多个账号，每个账号可配置独立 cookie、代理和 User-Agent。
 - **断点续爬**：通过 `--enable_resume_crawl true` 记录搜索页级 checkpoint，已完成页面会在下次运行时跳过。默认文件位于 `data/checkpoints/{platform}_{type}_{account}.json`。
 - **API-only 模式**：通过 `--disable_playwright true --lt cookie --cookies "..."` 使用 cookie 直接请求接口，不再把 Playwright 作为主干依赖。需要扫码、手机登录或浏览器态刷新时，可额外安装 `uv sync --extra browser` 继续使用原浏览器登录链路。
+- **AI Agent Skill**：内置 `agent-skills/mediacrawler/SKILL.md`、Claude Code slash command、Cursor rule 和安装脚本，让 Agent 按固定安全流程配置账号、代理、断点续爬并启动任务。
 
 账号配置可参考 `config/accounts.example.json`：
 
@@ -71,6 +72,22 @@ uv run python main.py \
   --enable_resume_crawl true \
   --disable_playwright true
 ```
+
+安装 Agent 集成：
+
+```shell
+# 安装当前项目内 Claude Code / Cursor 集成
+uv run python scripts/install_agent_skills.py --target project
+
+# 安装到 OpenClaw、Claude Code、Cursor 的用户目录
+uv run python scripts/install_agent_skills.py --target all
+```
+
+安装后：
+
+- Claude Code 可使用 `/mediacrawler-crawl`
+- Cursor 会读取 `.cursor/rules/mediacrawler.mdc`
+- OpenClaw 可读取 `~/.openclaw/skills/mediacrawler/SKILL.md`
 
 
 
