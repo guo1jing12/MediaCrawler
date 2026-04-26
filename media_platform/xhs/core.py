@@ -21,15 +21,8 @@ import asyncio
 import os
 import random
 from asyncio import Task
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from playwright.async_api import (
-    BrowserContext,
-    BrowserType,
-    Page,
-    Playwright,
-    async_playwright,
-)
 from tenacity import RetryError
 
 import config
@@ -38,6 +31,8 @@ from model.m_xiaohongshu import NoteUrlInfo, CreatorUrlInfo
 from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
 from store import xhs as xhs_store
 from tools import utils
+from tools.account_manager import resolve_proxy_formats
+from tools.checkpoint import CrawlCheckpoint
 from tools.cdp_browser import CDPBrowserManager
 from var import crawler_type_var, source_keyword_var
 
@@ -46,6 +41,14 @@ from .exception import DataFetchError, NoteNotFoundError
 from .field import SearchSortType
 from .help import parse_note_info_from_note_url, parse_creator_info_from_url, get_search_id
 from .login import XiaoHongShuLogin
+
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, BrowserType, Page, Playwright
+else:
+    BrowserContext = Any
+    BrowserType = Any
+    Page = Any
+    Playwright = Any
 
 
 class XiaoHongShuCrawler(AbstractCrawler):
@@ -61,14 +64,19 @@ class XiaoHongShuCrawler(AbstractCrawler):
         self.user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         self.cdp_manager = None
         self.ip_proxy_pool = None  # Proxy IP pool for automatic proxy refresh
+        self.checkpoint = CrawlCheckpoint(platform="xhs")
 
     async def start(self) -> None:
         playwright_proxy_format, httpx_proxy_format = None, None
         if config.ENABLE_IP_PROXY:
             self.ip_proxy_pool = await create_ip_pool(config.IP_PROXY_POOL_COUNT, enable_validate_ip=True)
-            ip_proxy_info: IpInfoModel = await self.ip_proxy_pool.get_proxy()
-            playwright_proxy_format, httpx_proxy_format = utils.format_proxy_info(ip_proxy_info)
+        playwright_proxy_format, httpx_proxy_format = await resolve_proxy_formats(self.ip_proxy_pool)
 
+        if config.DISABLE_PLAYWRIGHT:
+            await self.start_without_browser(httpx_proxy_format)
+            return
+
+        from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
             # Choose launch mode based on configuration
             if config.ENABLE_CDP_MODE:
@@ -126,6 +134,21 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
             utils.logger.info("[XiaoHongShuCrawler.start] Xhs Crawler finished ...")
 
+    async def start_without_browser(self, httpx_proxy_format: Optional[str]) -> None:
+        if config.LOGIN_TYPE != "cookie" or not config.COOKIES:
+            raise ValueError("[XiaoHongShuCrawler] API-only mode requires LOGIN_TYPE=cookie and COOKIES")
+        self.context_page = None
+        self.browser_context = None
+        self.xhs_client = await self.create_xhs_client(httpx_proxy_format)
+        crawler_type_var.set(config.CRAWLER_TYPE)
+        if config.CRAWLER_TYPE == "search":
+            await self.search()
+        elif config.CRAWLER_TYPE == "detail":
+            await self.get_specified_notes()
+        elif config.CRAWLER_TYPE == "creator":
+            await self.get_creators_and_notes()
+        utils.logger.info("[XiaoHongShuCrawler.start_without_browser] Xhs Crawler finished ...")
+
     async def search(self) -> None:
         """Search for notes and retrieve their comment information."""
         utils.logger.info("[XiaoHongShuCrawler.search] Begin search Xiaohongshu keywords")
@@ -139,6 +162,11 @@ class XiaoHongShuCrawler(AbstractCrawler):
             page = 1
             search_id = get_search_id()
             while (page - start_page + 1) * xhs_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
+                checkpoint_key = self.checkpoint.search_page_key(keyword, page)
+                if self.checkpoint.is_completed(checkpoint_key):
+                    utils.logger.info(f"[XiaoHongShuCrawler.search] Skip checkpointed page: {checkpoint_key}")
+                    page += 1
+                    continue
                 if page < start_page:
                     utils.logger.info(f"[XiaoHongShuCrawler.search] Skip page {page}")
                     page += 1
@@ -177,6 +205,10 @@ class XiaoHongShuCrawler(AbstractCrawler):
                     page += 1
                     utils.logger.info(f"[XiaoHongShuCrawler.search] Note details: {note_details}")
                     await self.batch_get_note_comments(note_ids, xsec_tokens)
+                    self.checkpoint.mark_completed(
+                        checkpoint_key,
+                        {"keyword": keyword, "page": page, "note_count": len(note_ids)},
+                    )
 
                     # Sleep after each page navigation
                     await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -360,10 +392,14 @@ class XiaoHongShuCrawler(AbstractCrawler):
     async def create_xhs_client(self, httpx_proxy: Optional[str]) -> XiaoHongShuClient:
         """Create Xiaohongshu client"""
         utils.logger.info("[XiaoHongShuCrawler.create_xhs_client] Begin create Xiaohongshu API client ...")
-        cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
-            self.browser_context,
-            urls=self.cookie_urls,
-        )
+        if config.DISABLE_PLAYWRIGHT:
+            cookie_str = config.COOKIES
+            cookie_dict = utils.convert_str_cookie_to_dict(cookie_str)
+        else:
+            cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
+                self.browser_context,
+                urls=self.cookie_urls,
+            )
         xhs_client_obj = XiaoHongShuClient(
             proxy=httpx_proxy,
             headers={

@@ -26,21 +26,15 @@ import asyncio
 import os
 # import random  # Removed as we now use fixed config.CRAWLER_MAX_SLEEP_SEC intervals
 from asyncio import Task
-from typing import Dict, List, Optional, Tuple
-
-from playwright.async_api import (
-    BrowserContext,
-    BrowserType,
-    Page,
-    Playwright,
-    async_playwright,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import config
 from base.base_crawler import AbstractCrawler
-from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
+from proxy.proxy_ip_pool import create_ip_pool
 from store import weibo as weibo_store
 from tools import utils
+from tools.account_manager import resolve_proxy_formats
+from tools.checkpoint import CrawlCheckpoint
 from tools.cdp_browser import CDPBrowserManager
 from var import crawler_type_var, source_keyword_var
 
@@ -49,6 +43,14 @@ from .exception import DataFetchError
 from .field import SearchType
 from .help import filter_search_result_card
 from .login import WeiboLogin
+
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, BrowserType, Page, Playwright
+else:
+    BrowserContext = Any
+    BrowserType = Any
+    Page = Any
+    Playwright = Any
 
 
 class WeiboCrawler(AbstractCrawler):
@@ -65,14 +67,19 @@ class WeiboCrawler(AbstractCrawler):
         self.mobile_user_agent = utils.get_mobile_user_agent()
         self.cdp_manager = None
         self.ip_proxy_pool = None  # Proxy IP pool for automatic proxy refresh
+        self.checkpoint = CrawlCheckpoint(platform="wb")
 
     async def start(self):
         playwright_proxy_format, httpx_proxy_format = None, None
         if config.ENABLE_IP_PROXY:
             self.ip_proxy_pool = await create_ip_pool(config.IP_PROXY_POOL_COUNT, enable_validate_ip=True)
-            ip_proxy_info: IpInfoModel = await self.ip_proxy_pool.get_proxy()
-            playwright_proxy_format, httpx_proxy_format = utils.format_proxy_info(ip_proxy_info)
+        playwright_proxy_format, httpx_proxy_format = await resolve_proxy_formats(self.ip_proxy_pool)
 
+        if config.DISABLE_PLAYWRIGHT:
+            await self.start_without_browser(httpx_proxy_format)
+            return
+
+        from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
             # Select launch mode based on configuration
             if config.ENABLE_CDP_MODE:
@@ -134,6 +141,21 @@ class WeiboCrawler(AbstractCrawler):
                 pass
             utils.logger.info("[WeiboCrawler.start] Weibo Crawler finished ...")
 
+    async def start_without_browser(self, httpx_proxy_format: Optional[str]) -> None:
+        if config.LOGIN_TYPE != "cookie" or not config.COOKIES:
+            raise ValueError("[WeiboCrawler] API-only mode requires LOGIN_TYPE=cookie and COOKIES")
+        self.context_page = None
+        self.browser_context = None
+        self.wb_client = await self.create_weibo_client(httpx_proxy_format)
+        crawler_type_var.set(config.CRAWLER_TYPE)
+        if config.CRAWLER_TYPE == "search":
+            await self.search()
+        elif config.CRAWLER_TYPE == "detail":
+            await self.get_specified_notes()
+        elif config.CRAWLER_TYPE == "creator":
+            await self.get_creators_and_notes()
+        utils.logger.info("[WeiboCrawler.start_without_browser] Weibo Crawler finished ...")
+
     async def search(self):
         """
         search weibo note with keywords
@@ -163,6 +185,11 @@ class WeiboCrawler(AbstractCrawler):
             utils.logger.info(f"[WeiboCrawler.search] Current search keyword: {keyword}")
             page = 1
             while (page - start_page + 1) * weibo_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
+                checkpoint_key = self.checkpoint.search_page_key(keyword, page)
+                if self.checkpoint.is_completed(checkpoint_key):
+                    utils.logger.info(f"[WeiboCrawler.search] Skip checkpointed page: {checkpoint_key}")
+                    page += 1
+                    continue
                 if page < start_page:
                     utils.logger.info(f"[WeiboCrawler.search] Skip page: {page}")
                     page += 1
@@ -188,6 +215,10 @@ class WeiboCrawler(AbstractCrawler):
                 utils.logger.info(f"[WeiboCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
 
                 await self.batch_get_notes_comments(note_id_list)
+                self.checkpoint.mark_completed(
+                    checkpoint_key,
+                    {"keyword": keyword, "page": page - 1, "note_count": len(note_id_list)},
+                )
 
     async def get_specified_notes(self):
         """
@@ -339,10 +370,14 @@ class WeiboCrawler(AbstractCrawler):
     async def create_weibo_client(self, httpx_proxy: Optional[str]) -> WeiboClient:
         """Create xhs client"""
         utils.logger.info("[WeiboCrawler.create_weibo_client] Begin create weibo API client ...")
-        cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
-            self.browser_context,
-            urls=self.cookie_urls,
-        )
+        if config.DISABLE_PLAYWRIGHT:
+            cookie_str = config.COOKIES
+            cookie_dict = utils.convert_str_cookie_to_dict(cookie_str)
+        else:
+            cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
+                self.browser_context,
+                urls=self.cookie_urls,
+            )
         weibo_client_obj = WeiboClient(
             proxy=httpx_proxy,
             headers={

@@ -30,11 +30,16 @@ import re
 import urllib
 import urllib.parse
 from io import BytesIO
-from typing import Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import httpx
 from PIL import Image, ImageDraw, ImageShow
-from playwright.async_api import BrowserContext, Cookie, Page
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Cookie, Page
+else:
+    BrowserContext = Any
+    Cookie = Dict
+    Page = Any
 
 from . import utils
 from .httpx_util import make_async_client

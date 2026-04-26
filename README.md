@@ -35,9 +35,9 @@
 
 ### 🔧 技术原理
 
-- **核心技术**：基于 [Playwright](https://playwright.dev/) 浏览器自动化框架登录保存登录态
-- **无需JS逆向**：利用保留登录态的浏览器上下文环境，通过 JS 表达式获取签名参数
-- **优势特点**：无需逆向复杂的加密算法，大幅降低技术门槛
+- **核心技术**：默认支持基于 Cookie 的 API-only 抓取；需要扫码/手机登录时可选安装 [Playwright](https://playwright.dev/) 浏览器链路保存登录态
+- **签名能力**：小红书已接入 `xhshow` 纯算法签名，抖音/B站/知乎等平台沿用各自 HTTP 签名逻辑
+- **优势特点**：Playwright 不再是主干依赖，更适合 Linux、Docker 与多账号任务调度
 
 
 ## ✨ 功能特性
@@ -50,6 +50,27 @@
 | 微博   | ✅          | ✅              | ✅        | ✅              | ✅          | ✅        | ✅              |
 | 贴吧   | ✅          | ✅              | ✅        | ✅              | ✅          | ✅        | ✅              |
 | 知乎   | ✅          | ✅              | ✅        | ✅              | ✅          | ✅        | ✅              |
+
+### Pro-like 开源增强
+
+当前分支增加了三个可直接使用的运行能力：
+
+- **多账号调度**：通过 `--enable_multi_account true --account_config_path config/accounts.json` 顺序运行同平台的多个账号，每个账号可配置独立 cookie、代理和 User-Agent。
+- **断点续爬**：通过 `--enable_resume_crawl true` 记录搜索页级 checkpoint，已完成页面会在下次运行时跳过。默认文件位于 `data/checkpoints/{platform}_{type}_{account}.json`。
+- **API-only 模式**：通过 `--disable_playwright true --lt cookie --cookies "..."` 使用 cookie 直接请求接口，不再把 Playwright 作为主干依赖。需要扫码、手机登录或浏览器态刷新时，可额外安装 `uv sync --extra browser` 继续使用原浏览器登录链路。
+
+账号配置可参考 `config/accounts.example.json`：
+
+```shell
+uv run python main.py \
+  --platform xhs \
+  --type search \
+  --keywords "编程副业" \
+  --enable_multi_account true \
+  --account_config_path config/accounts.json \
+  --enable_resume_crawl true \
+  --disable_playwright true
+```
 
 
 

@@ -19,11 +19,10 @@
 
 import asyncio
 import json
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 from urllib.parse import urlencode, quote
 
 import requests
-from playwright.async_api import BrowserContext, Page
 from tenacity import RetryError, retry, stop_after_attempt, wait_fixed
 
 import config
@@ -34,6 +33,12 @@ from tools import utils
 
 from .field import SearchNoteType, SearchSortType
 from .help import TieBaExtractor
+
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
+else:
+    BrowserContext = Any
+    Page = Any
 
 
 class BaiduTieBaClient(AbstractApiClient):
@@ -247,6 +252,30 @@ class BaiduTieBaClient(AbstractApiClient):
         self.headers["Cookie"] = cookie_str
         utils.logger.info("[BaiduTieBaClient.update_cookies] Cookie has been updated")
 
+    async def _get_page_html(self, url: str, wait_seconds: Optional[float] = None) -> str:
+        if self.playwright_page:
+            await self.playwright_page.goto(url, wait_until="domcontentloaded")
+            await asyncio.sleep(wait_seconds if wait_seconds is not None else config.CRAWLER_MAX_SLEEP_SEC)
+            return await self.playwright_page.content()
+        return await self.request(
+            method="GET",
+            url=url,
+            return_ori_content=True,
+            proxy=self.default_ip_proxy,
+        )
+
+    async def _get_page_text(self, url: str, wait_seconds: Optional[float] = None) -> str:
+        if self.playwright_page:
+            await self.playwright_page.goto(url, wait_until="domcontentloaded")
+            await asyncio.sleep(wait_seconds if wait_seconds is not None else config.CRAWLER_MAX_SLEEP_SEC)
+            return await self.playwright_page.evaluate("() => document.body.innerText")
+        return await self.request(
+            method="GET",
+            url=url,
+            return_ori_content=True,
+            proxy=self.default_ip_proxy,
+        )
+
     async def get_notes_by_keyword(
         self,
         keyword: str,
@@ -266,10 +295,6 @@ class BaiduTieBaClient(AbstractApiClient):
         Returns:
 
         """
-        if not self.playwright_page:
-            utils.logger.error("[BaiduTieBaClient.get_notes_by_keyword] playwright_page is None, cannot use browser mode")
-            raise Exception("playwright_page is required for browser-based search")
-
         # Construct search URL
         # Example: https://tieba.baidu.com/f/search/res?ie=utf-8&qw=keyword
         search_url = f"{self._host}/f/search/res"
@@ -287,14 +312,7 @@ class BaiduTieBaClient(AbstractApiClient):
         utils.logger.info(f"[BaiduTieBaClient.get_notes_by_keyword] Accessing search page: {full_url}")
 
         try:
-            # Use Playwright to access search page
-            await self.playwright_page.goto(full_url, wait_until="domcontentloaded")
-
-            # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-
-            # Get page HTML content
-            page_content = await self.playwright_page.content()
+            page_content = await self._get_page_html(full_url)
             utils.logger.info(f"[BaiduTieBaClient.get_notes_by_keyword] Successfully retrieved search page HTML, length: {len(page_content)}")
 
             # Extract search results
@@ -315,23 +333,12 @@ class BaiduTieBaClient(AbstractApiClient):
         Returns:
             TiebaNote: Post detail object
         """
-        if not self.playwright_page:
-            utils.logger.error("[BaiduTieBaClient.get_note_by_id] playwright_page is None, cannot use browser mode")
-            raise Exception("playwright_page is required for browser-based note detail fetching")
-
         # Construct post detail URL
         note_url = f"{self._host}/p/{note_id}"
         utils.logger.info(f"[BaiduTieBaClient.get_note_by_id] Accessing post detail page: {note_url}")
 
         try:
-            # Use Playwright to access post detail page
-            await self.playwright_page.goto(note_url, wait_until="domcontentloaded")
-
-            # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-
-            # Get page HTML content
-            page_content = await self.playwright_page.content()
+            page_content = await self._get_page_html(note_url)
             utils.logger.info(f"[BaiduTieBaClient.get_note_by_id] Successfully retrieved post detail HTML, length: {len(page_content)}")
 
             # Extract post details
@@ -359,10 +366,6 @@ class BaiduTieBaClient(AbstractApiClient):
         Returns:
             List[TiebaComment]: Comment list
         """
-        if not self.playwright_page:
-            utils.logger.error("[BaiduTieBaClient.get_note_all_comments] playwright_page is None, cannot use browser mode")
-            raise Exception("playwright_page is required for browser-based comment fetching")
-
         result: List[TiebaComment] = []
         current_page = 1
 
@@ -372,14 +375,7 @@ class BaiduTieBaClient(AbstractApiClient):
             utils.logger.info(f"[BaiduTieBaClient.get_note_all_comments] Accessing comment page: {comment_url}")
 
             try:
-                # Use Playwright to access comment page
-                await self.playwright_page.goto(comment_url, wait_until="domcontentloaded")
-
-                # Wait for page loading, using delay setting from config file
-                await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-
-                # Get page HTML content
-                page_content = await self.playwright_page.content()
+                page_content = await self._get_page_html(comment_url)
 
                 # Extract comments
                 comments = self._page_extractor.extract_tieba_note_parment_comments(
@@ -433,10 +429,6 @@ class BaiduTieBaClient(AbstractApiClient):
         if not config.ENABLE_GET_SUB_COMMENTS:
             return []
 
-        if not self.playwright_page:
-            utils.logger.error("[BaiduTieBaClient.get_comments_all_sub_comments] playwright_page is None, cannot use browser mode")
-            raise Exception("playwright_page is required for browser-based sub-comment fetching")
-
         all_sub_comments: List[TiebaComment] = []
 
         for parment_comment in comments:
@@ -458,14 +450,7 @@ class BaiduTieBaClient(AbstractApiClient):
                 utils.logger.info(f"[BaiduTieBaClient.get_comments_all_sub_comments] Accessing sub-comment page: {sub_comment_url}")
 
                 try:
-                    # Use Playwright to access sub-comment page
-                    await self.playwright_page.goto(sub_comment_url, wait_until="domcontentloaded")
-
-                    # Wait for page loading, using delay setting from config file
-                    await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-
-                    # Get page HTML content
-                    page_content = await self.playwright_page.content()
+                    page_content = await self._get_page_html(sub_comment_url)
 
                     # Extract sub-comments
                     sub_comments = self._page_extractor.extract_tieba_note_sub_comments(
@@ -506,23 +491,12 @@ class BaiduTieBaClient(AbstractApiClient):
         Returns:
             List[TiebaNote]: Post list
         """
-        if not self.playwright_page:
-            utils.logger.error("[BaiduTieBaClient.get_notes_by_tieba_name] playwright_page is None, cannot use browser mode")
-            raise Exception("playwright_page is required for browser-based tieba note fetching")
-
         # Construct Tieba post list URL
         tieba_url = f"{self._host}/f?kw={quote(tieba_name)}&pn={page_num}"
         utils.logger.info(f"[BaiduTieBaClient.get_notes_by_tieba_name] Accessing Tieba page: {tieba_url}")
 
         try:
-            # Use Playwright to access Tieba page
-            await self.playwright_page.goto(tieba_url, wait_until="domcontentloaded")
-
-            # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-
-            # Get page HTML content
-            page_content = await self.playwright_page.content()
+            page_content = await self._get_page_html(tieba_url)
             utils.logger.info(f"[BaiduTieBaClient.get_notes_by_tieba_name] Successfully retrieved Tieba page HTML, length: {len(page_content)}")
 
             # Extract post list
@@ -543,21 +517,10 @@ class BaiduTieBaClient(AbstractApiClient):
         Returns:
             str: Page HTML content
         """
-        if not self.playwright_page:
-            utils.logger.error("[BaiduTieBaClient.get_creator_info_by_url] playwright_page is None, cannot use browser mode")
-            raise Exception("playwright_page is required for browser-based creator info fetching")
-
         utils.logger.info(f"[BaiduTieBaClient.get_creator_info_by_url] Accessing creator homepage: {creator_url}")
 
         try:
-            # Use Playwright to access creator homepage
-            await self.playwright_page.goto(creator_url, wait_until="domcontentloaded")
-
-            # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-
-            # Get page HTML content
-            page_content = await self.playwright_page.content()
+            page_content = await self._get_page_html(creator_url)
             utils.logger.info(f"[BaiduTieBaClient.get_creator_info_by_url] Successfully retrieved creator homepage HTML, length: {len(page_content)}")
 
             return page_content
@@ -576,34 +539,19 @@ class BaiduTieBaClient(AbstractApiClient):
         Returns:
             Dict: Dictionary containing post data
         """
-        if not self.playwright_page:
-            utils.logger.error("[BaiduTieBaClient.get_notes_by_creator] playwright_page is None, cannot use browser mode")
-            raise Exception("playwright_page is required for browser-based creator notes fetching")
-
         # Construct creator post list URL
         creator_url = f"{self._host}/home/get/getthread?un={quote(user_name)}&pn={page_number}&id=utf-8&_={utils.get_current_timestamp()}"
         utils.logger.info(f"[BaiduTieBaClient.get_notes_by_creator] Accessing creator post list: {creator_url}")
 
         try:
-            # Use Playwright to access creator post list page
-            await self.playwright_page.goto(creator_url, wait_until="domcontentloaded")
-
-            # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-
-            # Get page content (this API returns JSON)
-            page_content = await self.playwright_page.content()
-
-            # Extract JSON data (page will contain <pre> tag or is directly JSON)
             try:
-                # Try to extract JSON from page
-                json_text = await self.playwright_page.evaluate("() => document.body.innerText")
+                json_text = await self._get_page_text(creator_url)
                 result = json.loads(json_text)
                 utils.logger.info(f"[BaiduTieBaClient.get_notes_by_creator] Successfully retrieved creator post data")
                 return result
             except json.JSONDecodeError as e:
                 utils.logger.error(f"[BaiduTieBaClient.get_notes_by_creator] JSON parsing failed: {e}")
-                utils.logger.error(f"[BaiduTieBaClient.get_notes_by_creator] Page content: {page_content[:500]}")
+                utils.logger.error(f"[BaiduTieBaClient.get_notes_by_creator] Page content: {json_text[:500]}")
                 raise Exception(f"Failed to parse JSON from creator notes page: {e}")
 
         except Exception as e:

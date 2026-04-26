@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 from urllib.parse import quote, urlencode
 
 import httpx
-from playwright.async_api import BrowserContext, Page
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_not_exception_type
 from tools.httpx_util import make_async_client
 
@@ -33,7 +32,11 @@ from proxy.proxy_mixin import ProxyRefreshMixin
 from tools import utils
 
 if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
     from proxy.proxy_ip_pool import ProxyIpPool
+else:
+    BrowserContext = Any
+    Page = Any
 
 from .exception import DataFetchError, IPBlockError, NoteNotFoundError
 from .field import SearchNoteType, SearchSortType
@@ -50,7 +53,7 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         proxy=None,
         *,
         headers: Dict[str, str],
-        playwright_page: Page,
+        playwright_page: Optional[Page],
         cookie_dict: Dict[str, str],
         proxy_ip_pool: Optional["ProxyIpPool"] = None,
     ):

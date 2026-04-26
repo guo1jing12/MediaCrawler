@@ -300,6 +300,73 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 rich_help_panel="Proxy Configuration",
             ),
         ] = config.IP_PROXY_PROVIDER_NAME,
+        enable_multi_account: Annotated[
+            str,
+            typer.Option(
+                "--enable_multi_account",
+                help="Whether to run all enabled accounts from account_config_path",
+                rich_help_panel="Account Configuration",
+                show_default=True,
+            ),
+        ] = str(config.ENABLE_MULTI_ACCOUNT),
+        account_config_path: Annotated[
+            str,
+            typer.Option(
+                "--account_config_path",
+                help="Path to account JSON config used by multi-account mode",
+                rich_help_panel="Account Configuration",
+            ),
+        ] = config.ACCOUNT_CONFIG_PATH,
+        account_name: Annotated[
+            str,
+            typer.Option(
+                "--account_name",
+                help="Current single-account name used in checkpoint file naming",
+                rich_help_panel="Account Configuration",
+            ),
+        ] = config.ACCOUNT_NAME,
+        account_proxy: Annotated[
+            str,
+            typer.Option(
+                "--account_proxy",
+                help="Fixed proxy URL for the current account, e.g. http://user:pass@host:port",
+                rich_help_panel="Proxy Configuration",
+            ),
+        ] = config.ACCOUNT_PROXY,
+        disable_playwright: Annotated[
+            str,
+            typer.Option(
+                "--disable_playwright",
+                help="Run in API-only mode without importing/launching Playwright; cookie login is required",
+                rich_help_panel="Runtime Configuration",
+                show_default=True,
+            ),
+        ] = str(config.DISABLE_PLAYWRIGHT),
+        enable_resume_crawl: Annotated[
+            str,
+            typer.Option(
+                "--enable_resume_crawl",
+                help="Enable local JSON checkpoint resume",
+                rich_help_panel="Runtime Configuration",
+                show_default=True,
+            ),
+        ] = str(config.ENABLE_RESUME_CRAWL),
+        resume_checkpoint_dir: Annotated[
+            str,
+            typer.Option(
+                "--resume_checkpoint_dir",
+                help="Directory for checkpoint files",
+                rich_help_panel="Runtime Configuration",
+            ),
+        ] = config.RESUME_CHECKPOINT_DIR,
+        resume_checkpoint_file: Annotated[
+            str,
+            typer.Option(
+                "--resume_checkpoint_file",
+                help="Use a specific checkpoint file instead of generated platform/type/account path",
+                rich_help_panel="Runtime Configuration",
+            ),
+        ] = config.RESUME_CHECKPOINT_FILE,
     ) -> SimpleNamespace:
         """MediaCrawler 命令行入口"""
 
@@ -307,6 +374,9 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         enable_sub_comment = _to_bool(get_sub_comment)
         enable_headless = _to_bool(headless)
         enable_ip_proxy_value = _to_bool(enable_ip_proxy)
+        enable_multi_account_value = _to_bool(enable_multi_account)
+        disable_playwright_value = _to_bool(disable_playwright)
+        enable_resume_crawl_value = _to_bool(enable_resume_crawl)
         init_db_value = init_db.value if init_db else None
 
         # Parse specified_id and creator_id into lists
@@ -331,6 +401,21 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.ENABLE_IP_PROXY = enable_ip_proxy_value
         config.IP_PROXY_POOL_COUNT = ip_proxy_pool_count
         config.IP_PROXY_PROVIDER_NAME = ip_proxy_provider_name
+        config.ENABLE_MULTI_ACCOUNT = enable_multi_account_value
+        config.ACCOUNT_CONFIG_PATH = account_config_path
+        config.ACCOUNT_NAME = account_name
+        config.ACCOUNT_PROXY = account_proxy
+        config.DISABLE_PLAYWRIGHT = disable_playwright_value
+        config.ENABLE_RESUME_CRAWL = enable_resume_crawl_value
+        config.RESUME_CHECKPOINT_DIR = resume_checkpoint_dir
+        config.RESUME_CHECKPOINT_FILE = resume_checkpoint_file
+
+        if (
+            config.DISABLE_PLAYWRIGHT
+            and not config.ENABLE_MULTI_ACCOUNT
+            and config.LOGIN_TYPE != LoginTypeEnum.COOKIE.value
+        ):
+            raise typer.BadParameter("--disable_playwright requires --lt cookie and a valid --cookies value or multi-account cookies")
 
         # Set platform-specific ID lists for detail/creator mode
         if specified_id_list:
@@ -371,6 +456,14 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             cookies=config.COOKIES,
             specified_id=specified_id,
             creator_id=creator_id,
+            enable_multi_account=config.ENABLE_MULTI_ACCOUNT,
+            account_config_path=config.ACCOUNT_CONFIG_PATH,
+            account_name=config.ACCOUNT_NAME,
+            account_proxy=config.ACCOUNT_PROXY,
+            disable_playwright=config.DISABLE_PLAYWRIGHT,
+            enable_resume_crawl=config.ENABLE_RESUME_CRAWL,
+            resume_checkpoint_dir=config.RESUME_CHECKPOINT_DIR,
+            resume_checkpoint_file=config.RESUME_CHECKPOINT_FILE,
         )
 
     command = typer.main.get_command(app)

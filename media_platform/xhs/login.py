@@ -21,9 +21,13 @@
 import asyncio
 import functools
 import sys
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from playwright.async_api import BrowserContext, Page
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
+else:
+    BrowserContext = Any
+    Page = Any
 from tenacity import (RetryError, retry, retry_if_result, stop_after_attempt,
                       wait_fixed)
 

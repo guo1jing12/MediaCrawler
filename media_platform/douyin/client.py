@@ -24,7 +24,6 @@ import urllib.parse
 from typing import TYPE_CHECKING, Any, Callable, Dict, Union, Optional
 
 import httpx
-from playwright.async_api import BrowserContext
 
 from base.base_crawler import AbstractApiClient
 from proxy.proxy_mixin import ProxyRefreshMixin
@@ -33,7 +32,11 @@ from tools.httpx_util import make_async_client
 from var import request_keyword_var
 
 if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
     from proxy.proxy_ip_pool import ProxyIpPool
+else:
+    BrowserContext = Any
+    Page = Any
 
 from .exception import *
 from .field import *
@@ -79,7 +82,9 @@ class DouYinClient(AbstractApiClient, ProxyRefreshMixin):
         if not params:
             return
         headers = headers or self.headers
-        local_storage: Dict = await self.playwright_page.evaluate("() => window.localStorage")  # type: ignore
+        local_storage: Dict = {}
+        if self.playwright_page is not None:
+            local_storage = await self.playwright_page.evaluate("() => window.localStorage")  # type: ignore
         common_params = {
             "device_platform": "webapp",
             "aid": "6383",
@@ -148,6 +153,8 @@ class DouYinClient(AbstractApiClient, ProxyRefreshMixin):
         return await self.request(method="POST", url=f"{self._host}{uri}", data=data, headers=headers)
 
     async def pong(self, browser_context: BrowserContext) -> bool:
+        if self.playwright_page is None:
+            return self.cookie_dict.get("LOGIN_STATUS") == "1"
         local_storage = await self.playwright_page.evaluate("() => window.localStorage")
         if local_storage.get("HasUserLogin", "") == "1":
             return True

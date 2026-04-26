@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 from urllib.parse import urlencode
 
 import httpx
-from playwright.async_api import BrowserContext, Page
 from tools.httpx_util import make_async_client
 
 import config
@@ -37,7 +36,11 @@ from proxy.proxy_mixin import ProxyRefreshMixin
 from tools import utils
 
 if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
     from proxy.proxy_ip_pool import ProxyIpPool
+else:
+    BrowserContext = Any
+    Page = Any
 
 from .exception import DataFetchError
 from .field import CommentOrderType, SearchOrderType
@@ -52,7 +55,7 @@ class BilibiliClient(AbstractApiClient, ProxyRefreshMixin):
         proxy=None,
         *,
         headers: Dict[str, str],
-        playwright_page: Page,
+        playwright_page: Optional[Page],
         cookie_dict: Dict[str, str],
         proxy_ip_pool: Optional["ProxyIpPool"] = None,
     ):
@@ -100,7 +103,9 @@ class BilibiliClient(AbstractApiClient, ProxyRefreshMixin):
         Get the latest img_key and sub_key
         :return:
         """
-        local_storage = await self.playwright_page.evaluate("() => window.localStorage")
+        local_storage = {}
+        if self.playwright_page is not None:
+            local_storage = await self.playwright_page.evaluate("() => window.localStorage")
         wbi_img_urls = local_storage.get("wbi_img_urls", "")
         if not wbi_img_urls:
             img_url_from_storage = local_storage.get("wbi_img_url")

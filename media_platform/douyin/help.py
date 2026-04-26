@@ -26,10 +26,13 @@
 
 import random
 import re
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import execjs
-from playwright.async_api import Page
+if TYPE_CHECKING:
+    from playwright.async_api import Page
+else:
+    Page = Any
 
 from model.m_douyin import VideoUrlInfo, CreatorUrlInfo
 from tools.crawler_util import extract_url_params_to_dict

@@ -26,24 +26,17 @@ import asyncio
 import os
 # import random  # Removed as we now use fixed config.CRAWLER_MAX_SLEEP_SEC intervals
 from asyncio import Task
-from typing import Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from datetime import datetime, timedelta
 import pandas as pd
 
-from playwright.async_api import (
-    BrowserContext,
-    BrowserType,
-    Page,
-    Playwright,
-    async_playwright,
-)
-from playwright._impl._errors import TargetClosedError
-
 import config
 from base.base_crawler import AbstractCrawler
-from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
+from proxy.proxy_ip_pool import create_ip_pool
 from store import bilibili as bilibili_store
 from tools import utils
+from tools.account_manager import resolve_proxy_formats
+from tools.checkpoint import CrawlCheckpoint
 from tools.cdp_browser import CDPBrowserManager
 from var import crawler_type_var, source_keyword_var
 
@@ -52,6 +45,19 @@ from .exception import DataFetchError
 from .field import SearchOrderType
 from .help import parse_video_info_from_url, parse_creator_info_from_url
 from .login import BilibiliLogin
+
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, BrowserType, Page, Playwright
+else:
+    BrowserContext = Any
+    BrowserType = Any
+    Page = Any
+    Playwright = Any
+
+try:
+    from playwright._impl._errors import TargetClosedError
+except ImportError:
+    TargetClosedError = RuntimeError
 
 
 class BilibiliCrawler(AbstractCrawler):
@@ -66,14 +72,19 @@ class BilibiliCrawler(AbstractCrawler):
         self.user_agent = utils.get_user_agent()
         self.cdp_manager = None
         self.ip_proxy_pool = None  # Proxy IP pool for automatic proxy refresh
+        self.checkpoint = CrawlCheckpoint(platform="bili")
 
     async def start(self):
         playwright_proxy_format, httpx_proxy_format = None, None
         if config.ENABLE_IP_PROXY:
             self.ip_proxy_pool = await create_ip_pool(config.IP_PROXY_POOL_COUNT, enable_validate_ip=True)
-            ip_proxy_info: IpInfoModel = await self.ip_proxy_pool.get_proxy()
-            playwright_proxy_format, httpx_proxy_format = utils.format_proxy_info(ip_proxy_info)
+        playwright_proxy_format, httpx_proxy_format = await resolve_proxy_formats(self.ip_proxy_pool)
 
+        if config.DISABLE_PLAYWRIGHT:
+            await self.start_without_browser(httpx_proxy_format)
+            return
+
+        from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
             # Choose launch mode based on configuration
             if config.ENABLE_CDP_MODE:
@@ -132,6 +143,26 @@ class BilibiliCrawler(AbstractCrawler):
             else:
                 pass
             utils.logger.info("[BilibiliCrawler.start] Bilibili Crawler finished ...")
+
+    async def start_without_browser(self, httpx_proxy_format: Optional[str]) -> None:
+        if config.LOGIN_TYPE != "cookie" or not config.COOKIES:
+            raise ValueError("[BilibiliCrawler] API-only mode requires LOGIN_TYPE=cookie and COOKIES")
+        self.context_page = None
+        self.browser_context = None
+        self.bili_client = await self.create_bilibili_client(httpx_proxy_format)
+        crawler_type_var.set(config.CRAWLER_TYPE)
+        if config.CRAWLER_TYPE == "search":
+            await self.search()
+        elif config.CRAWLER_TYPE == "detail":
+            await self.get_specified_videos(config.BILI_SPECIFIED_ID_LIST)
+        elif config.CRAWLER_TYPE == "creator":
+            if config.CREATOR_MODE:
+                for creator_url in config.BILI_CREATOR_ID_LIST:
+                    creator_info = parse_creator_info_from_url(creator_url)
+                    await self.get_creator_videos(int(creator_info.creator_id))
+            else:
+                await self.get_all_creator_details(config.BILI_CREATOR_ID_LIST)
+        utils.logger.info("[BilibiliCrawler.start_without_browser] Bilibili Crawler finished ...")
 
     async def search(self):
         """
@@ -195,6 +226,11 @@ class BilibiliCrawler(AbstractCrawler):
             utils.logger.info(f"[BilibiliCrawler.search_by_keywords] Current search keyword: {keyword}")
             page = 1
             while (page - start_page + 1) * bili_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
+                checkpoint_key = self.checkpoint.search_page_key(keyword, page)
+                if self.checkpoint.is_completed(checkpoint_key):
+                    utils.logger.info(f"[BilibiliCrawler.search_by_keywords] Skip checkpointed page: {checkpoint_key}")
+                    page += 1
+                    continue
                 if page < start_page:
                     utils.logger.info(f"[BilibiliCrawler.search_by_keywords] Skip page: {page}")
                     page += 1
@@ -236,6 +272,10 @@ class BilibiliCrawler(AbstractCrawler):
                 utils.logger.info(f"[BilibiliCrawler.search_by_keywords] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
 
                 await self.batch_get_video_comments(video_id_list)
+                self.checkpoint.mark_completed(
+                    checkpoint_key,
+                    {"keyword": keyword, "page": page - 1, "video_count": len(video_id_list)},
+                )
 
     async def search_by_keywords_in_time_range(self, daily_limit: bool):
         """
@@ -466,10 +506,14 @@ class BilibiliCrawler(AbstractCrawler):
         :return: bilibili client
         """
         utils.logger.info("[BilibiliCrawler.create_bilibili_client] Begin create bilibili API client ...")
-        cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
-            self.browser_context,
-            urls=self.cookie_urls,
-        )
+        if config.DISABLE_PLAYWRIGHT:
+            cookie_str = config.COOKIES
+            cookie_dict = utils.convert_str_cookie_to_dict(cookie_str)
+        else:
+            cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
+                self.browser_context,
+                urls=self.cookie_urls,
+            )
         bilibili_client_obj = BilibiliClient(
             proxy=httpx_proxy,
             headers={

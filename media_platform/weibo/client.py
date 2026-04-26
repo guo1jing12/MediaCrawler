@@ -26,12 +26,11 @@ import asyncio
 import copy
 import json
 import re
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 from urllib.parse import parse_qs, unquote, urlencode
 
 import httpx
 from httpx import Response
-from playwright.async_api import BrowserContext, Page
 from tools.httpx_util import make_async_client
 from tenacity import retry, stop_after_attempt, wait_fixed
 
@@ -40,7 +39,11 @@ from proxy.proxy_mixin import ProxyRefreshMixin
 from tools import utils
 
 if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
     from proxy.proxy_ip_pool import ProxyIpPool
+else:
+    BrowserContext = Any
+    Page = Any
 
 from .exception import DataFetchError
 from .field import SearchType
@@ -54,7 +57,7 @@ class WeiboClient(ProxyRefreshMixin):
         proxy=None,
         *,
         headers: Dict[str, str],
-        playwright_page: Page,
+        playwright_page: Optional[Page],
         cookie_dict: Dict[str, str],
         proxy_ip_pool: Optional["ProxyIpPool"] = None,
     ):
@@ -86,9 +89,10 @@ class WeiboClient(ProxyRefreshMixin):
         except json.decoder.JSONDecodeError:
             # issue: #771 Search API returns error 432, retry multiple times + update h5 cookies
             utils.logger.error(f"[WeiboClient.request] request {method}:{url} err code: {response.status_code} res:{response.text}")
-            await self.playwright_page.goto(self._host)
-            await asyncio.sleep(2)
-            await self.update_cookies(browser_context=self.playwright_page.context)
+            if self.playwright_page is not None:
+                await self.playwright_page.goto(self._host)
+                await asyncio.sleep(2)
+                await self.update_cookies(browser_context=self.playwright_page.context)
             raise DataFetchError(f"get response code error: {response.status_code}")
 
         ok_code = data.get("ok")

@@ -21,10 +21,17 @@
 import asyncio
 import functools
 import sys
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from playwright.async_api import BrowserContext, Page
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
+else:
+    BrowserContext = Any
+    Page = Any
+try:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+except ImportError:
+    PlaywrightTimeoutError = TimeoutError
 from tenacity import (RetryError, retry, retry_if_result, stop_after_attempt,
                       wait_fixed)
 

@@ -1,0 +1,20 @@
+{
+  "accounts": [
+    {
+      "name": "xhs_01",
+      "platform": "xhs",
+      "cookies": "a1=...; web_session=...",
+      "proxy": "http://user:pass@127.0.0.1:7890",
+      "user_agent": "",
+      "enabled": true
+    },
+    {
+      "name": "xhs_02",
+      "platform": "xhs",
+      "cookies": "a1=...; web_session=...",
+      "proxy": "",
+      "user_agent": "",
+      "enabled": false
+    }
+  ]
+}

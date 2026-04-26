@@ -44,6 +44,7 @@ from media_platform.weibo import WeiboCrawler
 from media_platform.xhs import XiaoHongShuCrawler
 from media_platform.zhihu import ZhihuCrawler
 from tools.async_file_writer import AsyncFileWriter
+from tools.account_manager import apply_account_profile, load_account_profiles, reset_account_profile
 from var import crawler_type_var
 
 
@@ -106,8 +107,23 @@ async def main() -> None:
         print(f"Database {args.init_db} initialized successfully.")
         return
 
-    crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
-    await crawler.start()
+    account_profiles = load_account_profiles() if config.ENABLE_MULTI_ACCOUNT else []
+    if config.ENABLE_MULTI_ACCOUNT:
+        if not account_profiles:
+            raise ValueError(
+                f"Multi-account mode is enabled but no enabled account was found for platform {config.PLATFORM!r} in {config.ACCOUNT_CONFIG_PATH}"
+            )
+        for account_profile in account_profiles:
+            print(f"[Main] Starting account: {account_profile.name} ({account_profile.platform})")
+            apply_account_profile(account_profile)
+            crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
+            await crawler.start()
+            await async_cleanup(close_db=False)
+            crawler = None
+        reset_account_profile()
+    else:
+        crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
+        await crawler.start()
 
     _flush_excel_if_needed()
 
@@ -116,7 +132,7 @@ async def main() -> None:
     await _generate_wordcloud_if_needed()
 
 
-async def async_cleanup() -> None:
+async def async_cleanup(close_db: bool = True) -> None:
     global crawler
     if crawler:
         if getattr(crawler, "cdp_manager", None):
@@ -135,7 +151,7 @@ async def async_cleanup() -> None:
                 if "closed" not in error_msg and "disconnected" not in error_msg:
                     print(f"[Main] Error closing browser context: {e}")
 
-    if config.SAVE_DATA_OPTION in ("db", "sqlite"):
+    if close_db and config.SAVE_DATA_OPTION in ("db", "sqlite"):
         await db.close()
 
 if __name__ == "__main__":

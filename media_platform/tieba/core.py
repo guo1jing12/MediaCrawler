@@ -21,22 +21,16 @@
 import asyncio
 import os
 from asyncio import Task
-from typing import Dict, List, Optional, Tuple
-
-from playwright.async_api import (
-    BrowserContext,
-    BrowserType,
-    Page,
-    Playwright,
-    async_playwright,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import config
 from base.base_crawler import AbstractCrawler
 from model.m_baidu_tieba import TiebaCreator, TiebaNote
-from proxy.proxy_ip_pool import IpInfoModel, ProxyIpPool, create_ip_pool
+from proxy.proxy_ip_pool import ProxyIpPool, create_ip_pool
 from store import tieba as tieba_store
 from tools import utils
+from tools.account_manager import resolve_proxy_formats
+from tools.checkpoint import CrawlCheckpoint
 from tools.cdp_browser import CDPBrowserManager
 from var import crawler_type_var, source_keyword_var
 
@@ -44,6 +38,14 @@ from .client import BaiduTieBaClient
 from .field import SearchNoteType, SearchSortType
 from .help import TieBaExtractor
 from .login import BaiduTieBaLogin
+
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, BrowserType, Page, Playwright
+else:
+    BrowserContext = Any
+    BrowserType = Any
+    Page = Any
+    Playwright = Any
 
 
 class TieBaCrawler(AbstractCrawler):
@@ -58,6 +60,8 @@ class TieBaCrawler(AbstractCrawler):
         self.user_agent = utils.get_user_agent()
         self._page_extractor = TieBaExtractor()
         self.cdp_manager = None
+        self.ip_proxy_pool = None
+        self.checkpoint = CrawlCheckpoint(platform="tieba")
 
     async def start(self) -> None:
         """
@@ -70,15 +74,20 @@ class TieBaCrawler(AbstractCrawler):
             utils.logger.info(
                 "[BaiduTieBaCrawler.start] Begin create ip proxy pool ..."
             )
-            ip_proxy_pool = await create_ip_pool(
+            self.ip_proxy_pool = await create_ip_pool(
                 config.IP_PROXY_POOL_COUNT, enable_validate_ip=True
             )
-            ip_proxy_info: IpInfoModel = await ip_proxy_pool.get_proxy()
-            playwright_proxy_format, httpx_proxy_format = utils.format_proxy_info(ip_proxy_info)
+        playwright_proxy_format, httpx_proxy_format = await resolve_proxy_formats(self.ip_proxy_pool)
+        if httpx_proxy_format:
             utils.logger.info(
                 f"[BaiduTieBaCrawler.start] Init default ip proxy, value: {httpx_proxy_format}"
             )
 
+        if config.DISABLE_PLAYWRIGHT:
+            await self.start_without_browser(httpx_proxy_format)
+            return
+
+        from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
             # Choose startup mode based on configuration
             if config.ENABLE_CDP_MODE:
@@ -111,7 +120,7 @@ class TieBaCrawler(AbstractCrawler):
             # Create a client to interact with the baidutieba website.
             self.tieba_client = await self.create_tieba_client(
                 httpx_proxy_format,
-                ip_proxy_pool if config.ENABLE_IP_PROXY else None
+                self.ip_proxy_pool if config.ENABLE_IP_PROXY else None
             )
 
             # Check login status and perform login if necessary
@@ -145,6 +154,22 @@ class TieBaCrawler(AbstractCrawler):
 
             utils.logger.info("[BaiduTieBaCrawler.start] Tieba Crawler finished ...")
 
+    async def start_without_browser(self, httpx_proxy_format: Optional[str]) -> None:
+        if config.LOGIN_TYPE != "cookie" or not config.COOKIES:
+            raise ValueError("[TieBaCrawler] API-only mode requires LOGIN_TYPE=cookie and COOKIES")
+        self.context_page = None
+        self.browser_context = None
+        self.tieba_client = await self.create_tieba_client(httpx_proxy_format, self.ip_proxy_pool)
+        crawler_type_var.set(config.CRAWLER_TYPE)
+        if config.CRAWLER_TYPE == "search":
+            await self.search()
+            await self.get_specified_tieba_notes()
+        elif config.CRAWLER_TYPE == "detail":
+            await self.get_specified_notes()
+        elif config.CRAWLER_TYPE == "creator":
+            await self.get_creators_and_notes()
+        utils.logger.info("[TieBaCrawler.start_without_browser] Tieba Crawler finished ...")
+
     async def search(self) -> None:
         """
         Search for notes and retrieve their comment information.
@@ -167,6 +192,11 @@ class TieBaCrawler(AbstractCrawler):
             while (
                 page - start_page + 1
             ) * tieba_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
+                checkpoint_key = self.checkpoint.search_page_key(keyword, page)
+                if self.checkpoint.is_completed(checkpoint_key):
+                    utils.logger.info(f"[BaiduTieBaCrawler.search] Skip checkpointed page: {checkpoint_key}")
+                    page += 1
+                    continue
                 if page < start_page:
                     utils.logger.info(f"[BaiduTieBaCrawler.search] Skip page {page}")
                     page += 1
@@ -201,6 +231,10 @@ class TieBaCrawler(AbstractCrawler):
                     utils.logger.info(f"[TieBaCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page}")
 
                     page += 1
+                    self.checkpoint.mark_completed(
+                        checkpoint_key,
+                        {"keyword": keyword, "page": page - 1, "note_count": len(notes_list)},
+                    )
                 except Exception as ex:
                     utils.logger.error(
                         f"[BaiduTieBaCrawler.search] Search keywords error, current page: {page}, current keyword: {keyword}, err: {ex}"
@@ -560,14 +594,17 @@ class TieBaCrawler(AbstractCrawler):
         """
         utils.logger.info("[TieBaCrawler.create_tieba_client] Begin create tieba API client...")
 
-        # Extract User-Agent from real browser to avoid detection
-        user_agent = await self.context_page.evaluate("() => navigator.userAgent")
-        utils.logger.info(f"[TieBaCrawler.create_tieba_client] Extracted User-Agent from browser: {user_agent}")
-
-        cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
-            self.browser_context,
-            urls=self.cookie_urls,
-        )
+        if config.DISABLE_PLAYWRIGHT:
+            user_agent = config.ACCOUNT_USER_AGENT or self.user_agent
+            cookie_str = config.COOKIES
+        else:
+            # Extract User-Agent from real browser to avoid detection
+            user_agent = await self.context_page.evaluate("() => navigator.userAgent")
+            utils.logger.info(f"[TieBaCrawler.create_tieba_client] Extracted User-Agent from browser: {user_agent}")
+            cookie_str, _ = await utils.convert_browser_context_cookies(
+                self.browser_context,
+                urls=self.cookie_urls,
+            )
 
         # Build complete browser request headers, simulating real browser behavior
         tieba_client = BaiduTieBaClient(

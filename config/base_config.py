@@ -30,6 +30,28 @@ COOKIES = ""
 CRAWLER_TYPE = (
     "search"  # Crawling type, search (keyword search) | detail (post details) | creator (creator homepage data)
 )
+
+# ==================== Pro-like runtime features ====================
+# Multi-account mode. When enabled, MediaCrawler reads ACCOUNT_CONFIG_PATH
+# and runs the selected platform once for each matching account profile.
+ENABLE_MULTI_ACCOUNT = False
+ACCOUNT_CONFIG_PATH = "config/accounts.json"
+
+# Current account profile fields. These are overridden automatically when
+# ENABLE_MULTI_ACCOUNT is true, and can also be set directly for one account.
+ACCOUNT_NAME = "default"
+ACCOUNT_USER_AGENT = ""
+ACCOUNT_PROXY = ""  # http://user:pass@host:port or http://host:port
+
+# Breakpoint/resume mode. Completed crawl units are recorded in a local JSON
+# checkpoint file and skipped on the next run.
+ENABLE_RESUME_CRAWL = False
+RESUME_CHECKPOINT_DIR = "data/checkpoints"
+RESUME_CHECKPOINT_FILE = ""
+
+# API-only mode. This removes Playwright from the runtime path and requires
+# cookie login for platforms/actions that need authenticated requests.
+DISABLE_PLAYWRIGHT = False
 # Whether to enable IP proxy
 ENABLE_IP_PROXY = False
 

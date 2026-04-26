@@ -23,22 +23,16 @@ import os
 # import random  # Removed as we now use fixed config.CRAWLER_MAX_SLEEP_SEC intervals
 import time
 from asyncio import Task
-from typing import Dict, List, Optional, Tuple
-
-from playwright.async_api import (
-    BrowserContext,
-    BrowserType,
-    Page,
-    Playwright,
-    async_playwright,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import config
 from base.base_crawler import AbstractCrawler
 from model.m_kuaishou import VideoUrlInfo, CreatorUrlInfo
-from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
+from proxy.proxy_ip_pool import create_ip_pool
 from store import kuaishou as kuaishou_store
 from tools import utils
+from tools.account_manager import resolve_proxy_formats
+from tools.checkpoint import CrawlCheckpoint
 from tools.cdp_browser import CDPBrowserManager
 from var import comment_tasks_var, crawler_type_var, source_keyword_var
 
@@ -46,6 +40,14 @@ from .client import KuaiShouClient
 from .exception import DataFetchError
 from .help import parse_video_info_from_url, parse_creator_info_from_url
 from .login import KuaishouLogin
+
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, BrowserType, Page, Playwright
+else:
+    BrowserContext = Any
+    BrowserType = Any
+    Page = Any
+    Playwright = Any
 
 
 class KuaishouCrawler(AbstractCrawler):
@@ -60,6 +62,7 @@ class KuaishouCrawler(AbstractCrawler):
         self.user_agent = utils.get_user_agent()
         self.cdp_manager = None
         self.ip_proxy_pool = None  # Proxy IP pool, used for automatic proxy refresh
+        self.checkpoint = CrawlCheckpoint(platform="ks")
 
     async def start(self):
         playwright_proxy_format, httpx_proxy_format = None, None
@@ -67,11 +70,13 @@ class KuaishouCrawler(AbstractCrawler):
             self.ip_proxy_pool = await create_ip_pool(
                 config.IP_PROXY_POOL_COUNT, enable_validate_ip=True
             )
-            ip_proxy_info: IpInfoModel = await self.ip_proxy_pool.get_proxy()
-            playwright_proxy_format, httpx_proxy_format = utils.format_proxy_info(
-                ip_proxy_info
-            )
+        playwright_proxy_format, httpx_proxy_format = await resolve_proxy_formats(self.ip_proxy_pool)
 
+        if config.DISABLE_PLAYWRIGHT:
+            await self.start_without_browser(httpx_proxy_format)
+            return
+
+        from playwright.async_api import async_playwright
         async with async_playwright() as playwright:
             # Select startup mode based on configuration
             if config.ENABLE_CDP_MODE:
@@ -127,6 +132,21 @@ class KuaishouCrawler(AbstractCrawler):
 
             utils.logger.info("[KuaishouCrawler.start] Kuaishou Crawler finished ...")
 
+    async def start_without_browser(self, httpx_proxy_format: Optional[str]) -> None:
+        if config.LOGIN_TYPE != "cookie" or not config.COOKIES:
+            raise ValueError("[KuaishouCrawler] API-only mode requires LOGIN_TYPE=cookie and COOKIES")
+        self.context_page = None
+        self.browser_context = None
+        self.ks_client = await self.create_ks_client(httpx_proxy_format)
+        crawler_type_var.set(config.CRAWLER_TYPE)
+        if config.CRAWLER_TYPE == "search":
+            await self.search()
+        elif config.CRAWLER_TYPE == "detail":
+            await self.get_specified_videos()
+        elif config.CRAWLER_TYPE == "creator":
+            await self.get_creators_and_videos()
+        utils.logger.info("[KuaishouCrawler.start_without_browser] Kuaishou Crawler finished ...")
+
     async def search(self):
         utils.logger.info("[KuaishouCrawler.search] Begin search kuaishou keywords")
         ks_limit_count = 20  # kuaishou limit page fixed value
@@ -143,6 +163,11 @@ class KuaishouCrawler(AbstractCrawler):
             while (
                 page - start_page + 1
             ) * ks_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
+                checkpoint_key = self.checkpoint.search_page_key(keyword, page)
+                if self.checkpoint.is_completed(checkpoint_key):
+                    utils.logger.info(f"[KuaishouCrawler.search] Skip checkpointed page: {checkpoint_key}")
+                    page += 1
+                    continue
                 if page < start_page:
                     utils.logger.info(f"[KuaishouCrawler.search] Skip page: {page}")
                     page += 1
@@ -181,6 +206,10 @@ class KuaishouCrawler(AbstractCrawler):
                 utils.logger.info(f"[KuaishouCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
 
                 await self.batch_get_video_comments(video_id_list)
+                self.checkpoint.mark_completed(
+                    checkpoint_key,
+                    {"keyword": keyword, "page": page - 1, "video_count": len(video_id_list)},
+                )
 
     async def get_specified_videos(self):
         """Get the information and comments of the specified post"""
@@ -307,10 +336,14 @@ class KuaishouCrawler(AbstractCrawler):
         utils.logger.info(
             "[KuaishouCrawler.create_ks_client] Begin create kuaishou API client ..."
         )
-        cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
-            self.browser_context,
-            urls=self.cookie_urls,
-        )
+        if config.DISABLE_PLAYWRIGHT:
+            cookie_str = config.COOKIES
+            cookie_dict = utils.convert_str_cookie_to_dict(cookie_str)
+        else:
+            cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
+                self.browser_context,
+                urls=self.cookie_urls,
+            )
         ks_client_obj = KuaiShouClient(
             proxy=httpx_proxy,
             headers={

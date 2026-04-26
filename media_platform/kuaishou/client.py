@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
 import httpx
-from playwright.async_api import BrowserContext, Page
 
 import config
 from base.base_crawler import AbstractApiClient
@@ -34,7 +33,11 @@ from tools import utils
 from tools.httpx_util import make_async_client
 
 if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
     from proxy.proxy_ip_pool import ProxyIpPool
+else:
+    BrowserContext = Any
+    Page = Any
 
 from .exception import DataFetchError
 from .graphql import KuaiShouGraphQL
@@ -47,7 +50,7 @@ class KuaiShouClient(AbstractApiClient, ProxyRefreshMixin):
         proxy=None,
         *,
         headers: Dict[str, str],
-        playwright_page: Page,
+        playwright_page: Optional[Page],
         cookie_dict: Dict[str, str],
         proxy_ip_pool: Optional["ProxyIpPool"] = None,
     ):

@@ -24,8 +24,14 @@ import socket
 import httpx
 import signal
 import atexit
-from typing import Optional, Dict, Any
-from playwright.async_api import Browser, BrowserContext, Playwright
+from typing import TYPE_CHECKING, Optional, Dict, Any
+
+if TYPE_CHECKING:
+    from playwright.async_api import Browser, BrowserContext, Playwright
+else:
+    Browser = Any
+    BrowserContext = Any
+    Playwright = Any
 
 import config
 from tools.browser_launcher import BrowserLauncher
