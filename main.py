@@ -121,6 +121,9 @@ async def main() -> None:
             await async_cleanup(close_db=False)
             crawler = None
         reset_account_profile()
+        # Close DB after all accounts finished to prevent connection leak
+        if config.SAVE_DATA_OPTION in ("db", "sqlite"):
+            await db.close()
     else:
         crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
         await crawler.start()

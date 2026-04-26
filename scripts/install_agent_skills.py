@@ -76,6 +76,10 @@ def install_cursor_global(home: Path, dry_run: bool) -> None:
 
 
 def main() -> None:
+    # Validate script location to ensure relative paths resolve correctly
+    script_dir = Path(__file__).resolve().parent
+    if script_dir.name != "scripts":
+        raise SystemExit(f"This script must be run from the scripts/ directory, not {script_dir}")
     parser = argparse.ArgumentParser(description="Install MediaCrawler agent integrations.")
     parser.add_argument(
         "--target",

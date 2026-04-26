@@ -83,8 +83,11 @@ class CDPBrowserManager:
 
             raise SystemExit(0)
 
+        # Windows compatibility: signal.SIG_DFL behavior differs from Unix
         install_sigint = prev_sigint in (signal.default_int_handler, signal.SIG_DFL)
         install_sigterm = prev_sigterm == signal.SIG_DFL
+        if hasattr(signal, 'SIGBREAK'):  # Windows only
+            install_sigterm = install_sigterm and prev_sigterm != signal.SIG_IGN
 
         # Register SIGINT (Ctrl+C) and SIGTERM
         if install_sigint:
