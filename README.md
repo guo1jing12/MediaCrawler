@@ -62,6 +62,18 @@
 
 账号配置可参考 `config/accounts.example.json`：
 
+**API-only 模式（单账号，直接传 cookie）**：
+```shell
+uv run python main.py \
+  --platform xhs \
+  --type search \
+  --keywords "编程副业" \
+  --lt cookie \
+  --cookies "a1=xxx; web_session=xxx" \
+  --disable_playwright true
+```
+
+**多账号 + 断点续爬模式**：
 ```shell
 uv run python main.py \
   --platform xhs \
@@ -72,6 +84,7 @@ uv run python main.py \
   --enable_resume_crawl true \
   --disable_playwright true
 ```
+> 注：使用 `--enable_multi_account` 时，cookie 从 `accounts.json` 中读取，无需在命令行传 `--cookies`。
 
 安装 Agent 集成：
 
